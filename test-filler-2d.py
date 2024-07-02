@@ -11,8 +11,11 @@ def get_args():
     parser.add_argument('--ntrial', type=int, default=1)
     parser.add_argument('--seed', type=int, required=True)
     parser.add_argument('--nvec', type=int, default=10)
+    parser.add_argument('--err', type=float, default=0.01)
+    parser.add_argument('--show', action='store_true')
     parser.add_argument('--doplot-each', action='store_true')
     parser.add_argument('--doplot-avg', action='store_true')
+    parser.add_argument('--weighted', action='store_true')
     return parser.parse_args()
 
 
@@ -26,7 +29,7 @@ def make_gauss(dx, dy, fwhm, ny, nx, g1, g2):
     return g.drawImage(scale=PIXEL_SCALE, nx=nx, ny=ny).array
 
 
-def make_gauss_data(rng, nvec, fwhm_mean=0.8):
+def make_gauss_data(rng, nvec, err, fwhm_mean=0.8):
 
     nx, ny = 31, 31
     dy, dx = rng.uniform(
@@ -42,8 +45,7 @@ def make_gauss_data(rng, nvec, fwhm_mean=0.8):
     truth = np.zeros((nvec, ny, nx))
 
     truth0 = make_gauss(dx=dx, dy=dy, fwhm=fwhm_mean, ny=ny, nx=nx, g1=0, g2=0)
-    err = truth0.max() * 0.01 * np.sqrt(nvec)
-    # err = truth0.max() * 0.001 * np.sqrt(nvec)
+    err_per = truth0.max() * err * np.sqrt(nvec)
 
     for i, psf_fwhm in enumerate(psf_fwhms):
         print(psf_fwhm)
@@ -52,35 +54,11 @@ def make_gauss_data(rng, nvec, fwhm_mean=0.8):
         truth[i] = make_gauss(
             dx=dx, dy=dy, fwhm=psf_fwhm, ny=ny, nx=nx, g1=g1, g2=g2,
         )
-        data[i] = truth[i] + rng.normal(scale=err, size=(nx, ny))
+        data[i] = truth[i] + rng.normal(scale=err_per, size=(nx, ny))
 
-    data_err = data * 0 + err
+    data_err = data * 0 + err_per
 
     return truth, data, data_err, psf_fwhms
-
-
-def make_quadratic_data(rng, nvec):
-
-    nx = 20
-    x = np.linspace(1, 10, nx)
-
-    truth = x**2
-
-    nx = x.size
-    data = np.zeros((nvec, nx))
-    data_err = np.zeros((nvec, nx))
-
-    # err0 = 5
-    # err0 = 0.1
-    err0 = 0.01
-    err = err0 * np.sqrt(nvec)
-
-    for i in range(nvec):
-        data[i] = truth + rng.normal(scale=err, size=nx)
-
-    data_err = data * 0 + err
-
-    return x, truth, data, data_err
 
 
 def interp_one_data(data, flags, rng, i):
@@ -120,21 +98,6 @@ def interp_data(data, rng, like=0.2):
     for i in range(nvec):
         if rng.uniform() < like:
             interp_one_data(data, flags, rng, i)
-            # xmis_start = int(rng.uniform(low=mis_width, high=nx - mis_width))
-            # xmis_end = xmis_start + mis_width
-            #
-            # ymis_start = int(rng.uniform(low=mis_width, high=ny - mis_width))
-            # ymis_end = ymis_start + mis_width
-            #
-            # keep = np.ones((ny, nx), dtype=bool)
-            # keep[ymis_start:ymis_end, xmis_start:xmis_end] = False
-            #
-            # bad_msk = ~keep
-            #
-            # # interp = Akima1DInterpolator(x[wgood], data[i, wgood])
-            # interp = interp_image_nocheck(data[i], bad_msk)
-            # data[i] = interp
-            # flags[i, bad_msk] = 1
 
     return flags
 
@@ -145,9 +108,8 @@ def get_fwhm_dist(rng, mean=0.8, std=0.1):
 
 
 def avg(data, wts):
-    wtsn = wts[:, np.newaxis, np.newaxis]
-    dsum = (data * wtsn).sum(axis=0)
-    wsum = wts.sum()
+    dsum = (data * wts).sum(axis=0)
+    wsum = wts.sum(axis=0)
     davg = dsum / wsum
     derr = np.ones(davg.shape) / np.sqrt(wsum)
     return davg, derr
@@ -239,10 +201,10 @@ def doplot(
     mplt.close(fig)
 
 
-def plot_avg(davg_interp_diff_avg, davg_fill_diff_avg, outfile):
+def plot_avg(davg_interp_diff_avg, davg_fill_diff_avg, outfile=None):
     vmin, vmax = -0.007, 0.007
 
-    fig, axs = mplt.subplots(nrows=2, sharex=True, layout='constrained')  # , figsize=(8, 5))
+    fig, axs = mplt.subplots(nrows=2, sharex=True, layout='constrained')
 
     axs[0].set_title('interpolated')
     axs[1].set_title('filled')
@@ -250,9 +212,13 @@ def plot_avg(davg_interp_diff_avg, davg_fill_diff_avg, outfile):
     _pimage(fig, axs[0], davg_interp_diff_avg, vmin=vmin, vmax=vmax)
     _pimage(fig, axs[1], davg_fill_diff_avg, vmin=vmin, vmax=vmax)
 
-    print(f'writing: {outfile}')
-    # fig.tight_layout()
-    fig.savefig(outfile, dpi=150)
+    if outfile is not None:
+        print(f'writing: {outfile}')
+        fig.savefig(outfile, dpi=150)
+    else:
+        mplt.show()
+
+    mplt.close(fig)
 
 
 def main():
@@ -270,29 +236,39 @@ def main():
         # mis_width = 5
 
         truth, data, data_err, psf_fwhms = make_gauss_data(
-            rng=irng, nvec=args.nvec,
-        )
-
-        # mark missing data and interpolate
-        data_interp = data.copy()
-        flags = interp_data(data=data_interp, rng=irng)
-
-        # data_fill = data_interp.copy()
-        # data_fill = data.copy()
-        data_fill = data_interp.copy()
-        fill_bad(
-            data=data_fill,
-            data_interp=data_interp,
-            flags=flags,
-            # rng=irng,
+            rng=irng, nvec=args.nvec, err=args.err,
         )
 
         err = np.median(data_err, axis=(1, 2))
         wts = 1 / err**2
+        wts = wts[:, np.newaxis, np.newaxis]
 
+        # mark missing data and interpolate
+        data_interp = data.copy()
+        flags = interp_data(data=data_interp, rng=irng)
         davg_interp, davg_interp_err = avg(data_interp, wts)
-        davg_fill, davg_fill_err = avg(data_fill, wts)
         truth_avg, _ = avg(truth, wts)
+
+        if args.weighted:
+            zwts = data.copy()
+            for fi in range(zwts.shape[0]):
+                zwts[fi, :, :] = wts[fi]
+            wbad = np.where(flags != 0)
+            zwts[wbad] = 0
+            davg_fill, davg_fill_err = avg(data_interp, zwts)
+        else:
+
+            # data_fill = data_interp.copy()
+            # data_fill = data.copy()
+            data_fill = data_interp.copy()
+            fill_bad(
+                data=data_fill,
+                data_interp=data_interp,
+                flags=flags,
+                # rng=irng,
+            )
+
+            davg_fill, davg_fill_err = avg(data_fill, wts)
 
         if i == 0:
             davg_fill_diff_sum = davg_fill - truth_avg
@@ -302,7 +278,10 @@ def main():
             davg_interp_diff_sum += davg_interp - truth_avg
 
         if args.doplot_each:
-            outfile = f'test-nvec{args.nvec}-{iseed}-2d.png'
+            if not args.show:
+                outfile = f'test-nvec{args.nvec}-{iseed}-2d.png'
+            else:
+                outfile = None
             doplot(
                 flags=flags.sum(axis=0),
                 davg_interp=davg_interp,
@@ -314,7 +293,11 @@ def main():
             )
 
     if args.doplot_avg:
-        outfile = f'test-nvec{args.nvec}-{args.seed}-avg-2d.png'
+        if not args.show:
+            outfile = f'test-nvec{args.nvec}-{args.seed}-avg-2d.png'
+        else:
+            outfile = None
+
         plot_avg(
             davg_interp_diff_avg=davg_interp_diff_sum / args.ntrial,
             davg_fill_diff_avg=davg_fill_diff_sum / args.ntrial,
