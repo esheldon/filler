@@ -3,6 +3,7 @@ import matplotlib.pyplot as mplt
 from numba import njit
 
 PIXEL_SCALE = 0.2
+INTERP = 1
 
 
 def get_args():
@@ -85,7 +86,7 @@ def interp_one_data(data, flags, rng, i):
     # interp = Akima1DInterpolator(x[wgood], data[i, wgood])
     interp = interp_image_nocheck(data[i], bad_msk)
     data[i] = interp
-    flags[i, bad_msk] = 1
+    flags[i, bad_msk] = INTERP
 
     return flags
 
@@ -117,7 +118,7 @@ def avg(data, wts):
 
 
 @njit
-def set_weights_missing(flags, wts):
+def set_weights_missing(flags, interpflag, wts):
     """
     Set weights for missing data
 
@@ -140,7 +141,7 @@ def set_weights_missing(flags, wts):
         for j in range(ny):
             for k in range(nx):
                 if flags[i, j, k] != 0:
-                    if np.any(flags[:, j, k] == 0):
+                    if np.any(flags[:, j, k] & interpflag == 0):
                         wts[i, j, k] = 0.0
 
 
@@ -283,7 +284,7 @@ def main():
             for fi in range(zwts.shape[0]):
                 zwts[fi, :, :] = wts[fi]
 
-            set_weights_missing(flags, zwts)
+            set_weights_missing(flags=flags, interpflag=INTERP, wts=zwts)
             davg_fill, davg_fill_err = avg(data_interp, zwts)
         else:
 
