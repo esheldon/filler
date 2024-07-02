@@ -12,6 +12,7 @@ def get_args():
     parser.add_argument('--seed', type=int, required=True)
     parser.add_argument('--nvec', type=int, default=10)
     parser.add_argument('--err', type=float, default=0.01)
+    parser.add_argument('--interp-like', type=float, default=0.2)
     parser.add_argument('--show', action='store_true')
     parser.add_argument('--doplot-each', action='store_true')
     parser.add_argument('--doplot-avg', action='store_true')
@@ -48,7 +49,7 @@ def make_gauss_data(rng, nvec, err, fwhm_mean=0.8):
     err_per = truth0.max() * err * np.sqrt(nvec)
 
     for i, psf_fwhm in enumerate(psf_fwhms):
-        print(psf_fwhm)
+        # print(psf_fwhm)
         g1, g2 = rng.normal(scale=0.04, size=2)
 
         truth[i] = make_gauss(
@@ -113,6 +114,34 @@ def avg(data, wts):
     davg = dsum / wsum
     derr = np.ones(davg.shape) / np.sqrt(wsum)
     return davg, derr
+
+
+@njit
+def set_weights_missing(flags, wts):
+    """
+    Set weights for missing data
+
+    When a pixel in a particular image was interpolated, we have two options.
+    If there are other non interpolated pixels in the cube, just set the
+    weights to zero for the interpolated image.  If all are interpolated, leave
+    the weights as input.
+
+    Parameters
+    ----------
+    flags: array (Nepoch, ny, nx)
+        The flags array, pixel by pixel
+    wts: array (Nepoch, ny, nx)
+        The original weights array, to be modified.
+    """
+
+    nimage, ny, nx = flags.shape
+
+    for i in range(nimage):
+        for j in range(ny):
+            for k in range(nx):
+                if flags[i, j, k] != 0:
+                    if np.any(flags[:, j, k] == 0):
+                        wts[i, j, k] = 0.0
 
 
 @njit
@@ -245,7 +274,7 @@ def main():
 
         # mark missing data and interpolate
         data_interp = data.copy()
-        flags = interp_data(data=data_interp, rng=irng)
+        flags = interp_data(data=data_interp, rng=irng, like=args.interp_like)
         davg_interp, davg_interp_err = avg(data_interp, wts)
         truth_avg, _ = avg(truth, wts)
 
@@ -253,8 +282,8 @@ def main():
             zwts = data.copy()
             for fi in range(zwts.shape[0]):
                 zwts[fi, :, :] = wts[fi]
-            wbad = np.where(flags != 0)
-            zwts[wbad] = 0
+
+            set_weights_missing(flags, zwts)
             davg_fill, davg_fill_err = avg(data_interp, zwts)
         else:
 
